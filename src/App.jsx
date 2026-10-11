@@ -29,7 +29,10 @@ import {
   Menu,
   X, 
   LogOut,
-  Shield
+  Shield,
+  Settings,
+  Key,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function App() {
@@ -62,6 +65,15 @@ export default function App() {
   const [newPassword, setNewPassword] = useState('');
   const [newCategory, setNewCategory] = useState('banking');
   const [visiblePasswords, setVisiblePasswords] = useState({});
+
+  // Settings State (Αλλαγή Κωδικού & Διαγραφή)
+  const [oldPasswordInput, setOldPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [settingsMsg, setSettingsMsg] = useState('');
+  const [settingsError, setSettingsError] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   // Generator State
   const [genLength, setGenLength] = useState(16);
@@ -174,6 +186,100 @@ export default function App() {
     setDecryptedPasswords({});
     setIsSidebarOpen(false);
     await supabase.auth.signOut();
+  };
+
+  // Αλλαγή Master Password με Re-encryption
+  const handleChangeMasterPassword = async (e) => {
+    e.preventDefault();
+    setSettingsError('');
+    setSettingsMsg('');
+
+    if (newPasswordInput.length < 6) {
+      setSettingsError('Ο νέος κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες.');
+      return;
+    }
+
+    if (newPasswordInput !== confirmPasswordInput) {
+      setSettingsError('Οι νέοι κωδικοί δεν ταιριάζουν μεταξύ τους.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      // 1. Έλεγχος αν ο παλιός κωδικός είναι σωστός
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password: oldPasswordInput,
+      });
+
+      if (signInError) {
+        setSettingsError('Ο τρέχων κωδικός πρόσβασης είναι λανθασμένος.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // 2. Δημιουργία νέου κλειδιού κρυπτογράφησης
+      const newDerivedKey = await deriveKey(newPasswordInput, session.user.id);
+
+      // 3. Επαν-κρυπτογράφηση όλων των κωδικών στη βάση
+      for (const item of vaultItems) {
+        const clearText = decryptedPasswords[item.id] || '';
+        if (clearText) {
+          const newCipher = await encryptText(clearText, newDerivedKey);
+          await supabase
+            .from('vault_items')
+            .update({ encrypted_password: newCipher })
+            .eq('id', item.id);
+        }
+      }
+
+      // 4. Ενημέρωση κωδικού στο Supabase Auth
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPasswordInput
+      });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // 5. Ενημέρωση του ενεργού κλειδιού στη μνήμη
+      setEncryptionKey(newDerivedKey);
+      setSettingsMsg('Ο κωδικός πρόσβασης άλλαξε με επιτυχία!');
+      setOldPasswordInput('');
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+    } catch (err) {
+      setSettingsError('Σφάλμα κατά την αλλαγή κωδικού: ' + err.message);
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  // Διαγραφή Λογαριασμού & Όλων των Δεδομένων
+  const handleDeleteAccount = async () => {
+    const confirmDelete = window.confirm(
+      'ΠΡΟΣΟΧΗ: Αυτή η ενέργεια θα διαγράψει οριστικά όλους τους αποθηκευμένους κωδικούς σας από το cloud και θα αποσυνδέσει τον λογαριασμό. Είστε σίγουροι;'
+    );
+
+    if (!confirmDelete) return;
+
+    setIsDeletingAccount(true);
+    try {
+      // 1. Διαγραφή όλων των εγγραφών του χρήστη
+      const { error } = await supabase
+        .from('vault_items')
+        .delete()
+        .eq('user_id', session.user.id);
+
+      if (error) throw error;
+
+      alert('Όλα τα δεδομένα σας διαγράφηκαν με επιτυχία.');
+      await handleSignOut();
+    } catch (err) {
+      alert('Σφάλμα διαγραφής: ' + err.message);
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   // Προσθήκη Κωδικού
@@ -380,11 +486,13 @@ export default function App() {
             </p>
           </div>
 
-          <form onSubmit={isRegistering ? handleSignUp : handleSignIn} className="space-y-3">
+          <form onSubmit={isRegistering ? handleSignUp : handleSignIn} className="space-y-3" autoComplete="off">
             <div>
               <label className="text-[11px] text-slate-400 mb-1 block">Email</label>
               <input
                 type="email"
+                name="auth_email"
+                autoComplete="new-password"
                 placeholder="π.χ. user@example.com"
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
@@ -397,6 +505,8 @@ export default function App() {
               <label className="text-[11px] text-slate-400 mb-1 block">Κωδικός Πρόσβασης</label>
               <input
                 type="password"
+                name="auth_password"
+                autoComplete="new-password"
                 placeholder="Τουλάχιστον 6 χαρακτήρες"
                 value={authPassword}
                 onChange={(e) => setAuthPassword(e.target.value)}
@@ -447,7 +557,7 @@ export default function App() {
         />
       )}
 
-      {/* 2. SIDEBAR (Συρτάρι στα κινητά, σταθερό σε desktop) */}
+      {/* 2. SIDEBAR */}
       <aside className={`
         fixed md:static inset-y-0 left-0 z-50
         w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0
@@ -455,7 +565,7 @@ export default function App() {
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         <div>
-          {/* User Profile & Κουμπί κλεισίματος για κινητά */}
+          {/* User Profile */}
           <div className="p-3 border-b border-slate-800/80 flex items-center justify-between">
             <div className="p-2 rounded-2xl bg-slate-950/60 border border-slate-800/80 flex items-center gap-2.5 flex-1 min-w-0 mr-2">
               <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-xs shrink-0">
@@ -523,6 +633,16 @@ export default function App() {
             >
               <Dices className="w-4 h-4" />
               <span>Γεννήτρια Κωδικών</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveView('settings'); setIsSidebarOpen(false); setSettingsMsg(''); setSettingsError(''); }}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
+                activeView === 'settings' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              <span>Ρυθμίσεις & Ασφάλεια</span>
             </button>
           </div>
 
@@ -604,7 +724,7 @@ export default function App() {
       {/* 3. MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col overflow-y-auto relative pb-28 w-full min-w-0">
         
-        {/* Mobile Top Header με Hamburger */}
+        {/* Mobile Top Header */}
         <header className="md:hidden flex items-center justify-between p-4 bg-slate-900/90 border-b border-slate-800 sticky top-0 z-30 backdrop-blur-sm">
           <div className="flex items-center gap-3">
             <button
@@ -915,7 +1035,128 @@ export default function App() {
           </div>
         )}
 
-        {/* BOTTOM FIXED BAR - ΚΕΝΤΡΑΡΙΣΜΕΝΟ ΣΕ ΚΙΝΗΤΑ ΚΑΙ DESKTOP */}
+        {/* VIEW 5: SETTINGS & ACCOUNT MANAGEMENT */}
+        {activeView === 'settings' && (
+          <div className="p-4 md:p-8 max-w-2xl w-full mx-auto space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <Settings className="w-5 h-5 text-emerald-400" />
+                Ρυθμίσεις & Ασφάλεια
+              </h2>
+              <p className="text-xs text-slate-400">
+                Διαχειριστείτε τον κωδικό πρόσβασης και τον λογαριασμό σας
+              </p>
+            </div>
+
+            {/* Change Password Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Key className="w-4 h-4 text-emerald-400" />
+                Αλλαγή Κωδικού Πρόσβασης (Master Password)
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Οι αποθηκευμένοι κωδικοί σας θα επαν-κρυπτογραφηθούν αυτόματα με το νέο σας κλειδί.
+              </p>
+
+              <form onSubmit={handleChangeMasterPassword} className="space-y-3" autoComplete="off">
+                <div>
+                  <label className="text-[11px] text-slate-400 mb-1 block">Τρέχων Κωδικός</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="Εισάγετε τον τρέχοντα κωδικό"
+                    value={oldPasswordInput}
+                    onChange={(e) => setOldPasswordInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-400 mb-1 block">Νέος Κωδικός</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="Τουλάχιστον 6 χαρακτήρες"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] text-slate-400 mb-1 block">Επιβεβαίωση Νέου Κωδικού</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder="Επαναλάβετε τον νέο κωδικό"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                {settingsError && (
+                  <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 py-2 px-3 rounded-xl">
+                    {settingsError}
+                  </p>
+                )}
+
+                {settingsMsg && (
+                  <p className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 py-2 px-3 rounded-xl">
+                    {settingsMsg}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isChangingPassword}
+                  className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  {isChangingPassword ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Επαν-κρυπτογράφηση & Αποθήκευση...</span>
+                    </>
+                  ) : (
+                    <span>Ενημέρωση Κωδικού</span>
+                  )}
+                </button>
+              </form>
+            </div>
+
+            {/* Delete Account Card */}
+            <div className="bg-rose-950/20 border border-rose-500/20 rounded-3xl p-6 shadow-xl space-y-4">
+              <h3 className="text-sm font-bold text-rose-400 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400" />
+                Κατάργηση Λογαριασμού & Δεδομένων
+              </h3>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Η ενέργεια αυτή θα διαγράψει οριστικά όλους τους κωδικούς σας από το cloud vault και θα σας αποσυνδέσει. Τα δεδομένα δεν μπορούν να ανακτηθούν.
+              </p>
+
+              <button
+                onClick={handleDeleteAccount}
+                disabled={isDeletingAccount}
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {isDeletingAccount ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Διαγραφή...</span>
+                  </>
+                ) : (
+                  <span>Οριστική Διαγραφή Δεδομένων & Κατάργηση</span>
+                )}
+              </button>
+            </div>
+
+          </div>
+        )}
+
+        {/* BOTTOM FIXED BAR */}
         {activeView === 'vault' && (
           <div className="fixed bottom-6 left-0 right-0 md:left-64 flex justify-center px-4 pointer-events-none z-20">
             <button
@@ -930,91 +1171,89 @@ export default function App() {
 
       </main>
 
-     {/* MODAL: ADD NEW PASSWORD */}
-{isAddModalOpen && (
-  <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-        <span className="text-sm font-bold text-white flex items-center gap-2">
-          <PlusCircle className="w-4 h-4 text-emerald-400" />
-          Προσθήκη Νέου Κωδικού
-        </span>
-        <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
-          <X className="w-5 h-5" />
-        </button>
-      </div>
+      {/* MODAL: ADD NEW PASSWORD */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <span className="text-sm font-bold text-white flex items-center gap-2">
+                <PlusCircle className="w-4 h-4 text-emerald-400" />
+                Προσθήκη Νέου Κωδικού
+              </span>
+              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-      <form onSubmit={addVaultEntry} className="space-y-3" autoComplete="off">
-        <div>
-          <label className="text-[11px] text-slate-400 mb-1 block">Υπηρεσία / Ιστότοπος</label>
-          <input
-            type="text"
-            name="service_site"
-            autoComplete="off"
-            placeholder="π.χ. Netflix, Τράπεζα Πειραιώς"
-            value={newService}
-            onChange={(e) => setNewService(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-            required
-          />
+            <form onSubmit={addVaultEntry} className="space-y-3" autoComplete="off">
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Υπηρεσία / Ιστότοπος</label>
+                <input
+                  type="text"
+                  name="service_site"
+                  autoComplete="off"
+                  placeholder="π.χ. Netflix, Τράπεζα Πειραιώς"
+                  value={newService}
+                  onChange={(e) => setNewService(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Username / Email</label>
+                <input
+                  type="text"
+                  name="entry_account_id"
+                  autoComplete="off"
+                  placeholder="π.χ. user@example.com"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Κωδικός Πρόσβασης</label>
+                <input
+                  type="password"
+                  name="entry_credential_secret"
+                  autoComplete="new-password"
+                  placeholder="Εισάγετε τον κωδικό"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Κατηγορία</label>
+                <select
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="banking">Τράπεζα (Banking)</option>
+                  <option value="email">Ηλεκτρονικό Ταχυδρομείο (Email)</option>
+                  <option value="social">Social Media</option>
+                  <option value="work">Εργασία / Σπουδές</option>
+                </select>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors">
+                  Ακύρωση
+                </button>
+                <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors">
+                  Αποθήκευση
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-
-        <div>
-          <label className="text-[11px] text-slate-400 mb-1 block">Username / Email</label>
-          <input
-            type="text"
-            name="entry_account_id"
-            autoComplete="off"
-            placeholder="π.χ. user@example.com"
-            value={newUsername}
-            onChange={(e) => setNewUsername(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-          />
-        </div>
-
-        <div>
-          <label className="text-[11px] text-slate-400 mb-1 block">Κωδικός Πρόσβασης</label>
-          <input
-            type="password"
-            name="entry_credential_secret"
-            autoComplete="new-password"
-            placeholder="Εισάγετε τον κωδικό"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-            required
-          />
-        </div>
-
-        <div>
-          <label className="text-[11px] text-slate-400 mb-1 block">Κατηγορία</label>
-          <select
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
-          >
-            <option value="banking">Τράπεζα (Banking)</option>
-            <option value="email">Ηλεκτρονικό Ταχυδρομείο (Email)</option>
-            <option value="social">Social Media</option>
-            <option value="work">Εργασία / Σπουδές</option>
-          </select>
-        </div>
-
-        <div className="pt-2 flex gap-2">
-          <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors">
-            Ακύρωση
-          </button>
-          <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors">
-            Αποθήκευση
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-)}
-
-              
+      )}
 
     </div>
   );
-}  
+}
