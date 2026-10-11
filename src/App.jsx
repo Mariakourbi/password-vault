@@ -930,82 +930,90 @@ export default function App() {
 
       </main>
 
-      {/* MODAL: ADD NEW PASSWORD */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <span className="text-sm font-bold text-white flex items-center gap-2">
-                <PlusCircle className="w-4 h-4 text-emerald-400" />
-                Προσθήκη Νέου Κωδικού
-              </span>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+     {/* MODAL: ADD NEW PASSWORD */}
+{isAddModalOpen && (
+  <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <span className="text-sm font-bold text-white flex items-center gap-2">
+          <PlusCircle className="w-4 h-4 text-emerald-400" />
+          Προσθήκη Νέου Κωδικού
+        </span>
+        <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
 
-            <form onSubmit={addVaultEntry} className="space-y-3">
-              <div>
-                <label className="text-[11px] text-slate-400 mb-1 block">Υπηρεσία / Ιστότοπος</label>
-                <input
-                  type="text"
-                  placeholder="π.χ. Netflix, Τράπεζα Πειραιώς"
-                  value={newService}
-                  onChange={(e) => setNewService(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-slate-400 mb-1 block">Username / Email</label>
-                <input
-                  type="text"
-                  placeholder="π.χ. user@example.com"
-                  value={newUsername}
-                  onChange={(e) => setNewUsername(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-slate-400 mb-1 block">Κωδικός Πρόσβασης</label>
-                <input
-                  type="password"
-                  placeholder="Εισάγετε τον κωδικό"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] text-slate-400 mb-1 block">Κατηγορία</label>
-                <select
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="banking">Τράπεζα (Banking)</option>
-                  <option value="email">Ηλεκτρονικό Ταχυδρομείο (Email)</option>
-                  <option value="social">Social Media</option>
-                  <option value="work">Εργασία / Σπουδές</option>
-                </select>
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors">
-                  Ακύρωση
-                </button>
-                <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors">
-                  Αποθήκευση
-                </button>
-              </div>
-            </form>
-          </div>
+      <form onSubmit={addVaultEntry} className="space-y-3" autoComplete="off">
+        <div>
+          <label className="text-[11px] text-slate-400 mb-1 block">Υπηρεσία / Ιστότοπος</label>
+          <input
+            type="text"
+            name="service_site"
+            autoComplete="off"
+            placeholder="π.χ. Netflix, Τράπεζα Πειραιώς"
+            value={newService}
+            onChange={(e) => setNewService(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+            required
+          />
         </div>
-      )}
+
+        <div>
+          <label className="text-[11px] text-slate-400 mb-1 block">Username / Email</label>
+          <input
+            type="text"
+            name="entry_account_id"
+            autoComplete="off"
+            placeholder="π.χ. user@example.com"
+            value={newUsername}
+            onChange={(e) => setNewUsername(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+          />
+        </div>
+
+        <div>
+          <label className="text-[11px] text-slate-400 mb-1 block">Κωδικός Πρόσβασης</label>
+          <input
+            type="password"
+            name="entry_credential_secret"
+            autoComplete="new-password"
+            placeholder="Εισάγετε τον κωδικό"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="text-[11px] text-slate-400 mb-1 block">Κατηγορία</label>
+          <select
+            value={newCategory}
+            onChange={(e) => setNewCategory(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
+          >
+            <option value="banking">Τράπεζα (Banking)</option>
+            <option value="email">Ηλεκτρονικό Ταχυδρομείο (Email)</option>
+            <option value="social">Social Media</option>
+            <option value="work">Εργασία / Σπουδές</option>
+          </select>
+        </div>
+
+        <div className="pt-2 flex gap-2">
+          <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors">
+            Ακύρωση
+          </button>
+          <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors">
+            Αποθήκευση
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+
+              
 
     </div>
   );
