@@ -26,6 +26,7 @@ import {
   RotateCcw, 
   User, 
   Plus, 
+  Menu,
   X, 
   LogOut,
   Shield
@@ -38,6 +39,7 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Κλειδί κρυπτογράφησης
   const [encryptionKey, setEncryptionKey] = useState(null);
@@ -114,13 +116,10 @@ export default function App() {
           continue;
         }
 
-        // Αν έχουμε κλειδί, δοκιμάζουμε αποκρυπτογράφηση
         if (activeKey) {
           const res = await decryptText(item.encrypted_password, activeKey);
-          // Αν αποτύχει, σημαίνει πως ήταν αποθηκευμένο σε plain text από προηγούμενη έκδοση
           decMap[item.id] = res === '[Σφάλμα Αποκρυπτογράφησης]' ? item.encrypted_password : res;
         } else {
-          // Αν δεν έχει κλειδί, εμφανίζει ό,τι υπάρχει στη βάση
           decMap[item.id] = item.encrypted_password;
         }
       }
@@ -173,6 +172,7 @@ export default function App() {
   const handleSignOut = async () => {
     setEncryptionKey(null);
     setDecryptedPasswords({});
+    setIsSidebarOpen(false);
     await supabase.auth.signOut();
   };
 
@@ -439,14 +439,27 @@ export default function App() {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
       
-      {/* 1. SIDEBAR */}
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0">
+      {/* 1. OVERLAY ΓΙΑ ΚΙΝΗΤΑ */}
+      {isSidebarOpen && (
+        <div 
+          onClick={() => setIsSidebarOpen(false)} 
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 md:hidden"
+        />
+      )}
+
+      {/* 2. SIDEBAR (Συρτάρι στα κινητά, σταθερό σε desktop) */}
+      <aside className={`
+        fixed md:static inset-y-0 left-0 z-50
+        w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0
+        transition-transform duration-300 ease-in-out
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
         <div>
-          {/* User Profile */}
-          <div className="p-3 border-b border-slate-800/80">
-            <div className="p-2.5 rounded-2xl bg-slate-950/60 border border-slate-800/80 flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-xs shrink-0">
-                <User className="w-5 h-5" />
+          {/* User Profile & Κουμπί κλεισίματος για κινητά */}
+          <div className="p-3 border-b border-slate-800/80 flex items-center justify-between">
+            <div className="p-2 rounded-2xl bg-slate-950/60 border border-slate-800/80 flex items-center gap-2.5 flex-1 min-w-0 mr-2">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-xs shrink-0">
+                <User className="w-4 h-4" />
               </div>
               <div className="overflow-hidden">
                 <h1 className="text-xs font-bold text-white truncate">
@@ -457,13 +470,21 @@ export default function App() {
                 </p>
               </div>
             </div>
+
+            <button 
+              onClick={() => setIsSidebarOpen(false)}
+              className="p-2 text-slate-400 hover:text-white md:hidden cursor-pointer"
+              aria-label="Κλείσιμο μενού"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           {/* Navigation */}
           <div className="p-3 space-y-1">
             <span className="text-[10px] font-bold text-slate-500 uppercase px-3 mb-2 block tracking-wider">Εργαλεια</span>
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('all'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('all'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
                 activeView === 'vault' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
               }`}
@@ -473,7 +494,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveView('trash')}
+              onClick={() => { setActiveView('trash'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
                 activeView === 'trash' ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
               }`}
@@ -485,7 +506,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveView('auditor')}
+              onClick={() => { setActiveView('auditor'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
                 activeView === 'auditor' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
               }`}
@@ -495,7 +516,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveView('generator')}
+              onClick={() => { setActiveView('generator'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
                 activeView === 'generator' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
               }`}
@@ -510,7 +531,7 @@ export default function App() {
             <span className="text-[10px] font-bold text-slate-500 uppercase px-3 mb-2 block tracking-wider">Κατηγοριες</span>
             
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('all'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('all'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
                 selectedCategory === 'all' && activeView === 'vault' ? 'text-emerald-400 font-semibold' : 'text-slate-400 hover:text-white'
               }`}
@@ -520,7 +541,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('banking'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('banking'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
                 selectedCategory === 'banking' && activeView === 'vault' ? 'text-emerald-400 font-semibold' : 'text-slate-400 hover:text-white'
               }`}
@@ -530,7 +551,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('email'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('email'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
                 selectedCategory === 'email' && activeView === 'vault' ? 'text-emerald-400 font-semibold' : 'text-slate-400 hover:text-white'
               }`}
@@ -540,7 +561,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('social'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('social'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
                 selectedCategory === 'social' && activeView === 'vault' ? 'text-emerald-400 font-semibold' : 'text-slate-400 hover:text-white'
               }`}
@@ -550,7 +571,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setActiveView('vault'); setSelectedCategory('work'); }}
+              onClick={() => { setActiveView('vault'); setSelectedCategory('work'); setIsSidebarOpen(false); }}
               className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
                 selectedCategory === 'work' && activeView === 'vault' ? 'text-emerald-400 font-semibold' : 'text-slate-400 hover:text-white'
               }`}
@@ -580,12 +601,27 @@ export default function App() {
         </div>
       </aside>
 
-      {/* 2. MAIN CONTENT AREA */}
-      <main className="flex-1 flex flex-col overflow-y-auto relative pb-28">
+      {/* 3. MAIN CONTENT AREA */}
+      <main className="flex-1 flex flex-col overflow-y-auto relative pb-28 w-full min-w-0">
         
+        {/* Mobile Top Header με Hamburger */}
+        <header className="md:hidden flex items-center justify-between p-4 bg-slate-900/90 border-b border-slate-800 sticky top-0 z-30 backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 hover:text-white cursor-pointer"
+              aria-label="Άνοιγμα μενού"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <span className="text-xs font-bold text-white">Password Vault</span>
+          </div>
+          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+        </header>
+
         {/* VIEW 1: VAULT */}
         {activeView === 'vault' && (
-          <div className="p-8 max-w-5xl w-full mx-auto space-y-6">
+          <div className="p-4 md:p-8 max-w-5xl w-full mx-auto space-y-6">
             
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
@@ -607,10 +643,10 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 overflow-x-auto pb-1">
               <button
                 onClick={() => setFilterSecurity('all')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
                   filterSecurity === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -618,7 +654,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setFilterSecurity('reused')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
                   filterSecurity === 'reused' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -626,7 +662,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setFilterSecurity('weak')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
                   filterSecurity === 'weak' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -658,26 +694,26 @@ export default function App() {
                         className="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors"
                       >
                         <div className="flex items-center gap-3.5">
-                          <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-slate-400">
+                          <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-slate-400 shrink-0">
                             {item.category === 'banking' && <Landmark className="w-4 h-4 text-amber-400" />}
                             {item.category === 'email' && <Mail className="w-4 h-4 text-sky-400" />}
                             {item.category === 'social' && <Share2 className="w-4 h-4 text-pink-400" />}
                             {item.category === 'work' && <Briefcase className="w-4 h-4 text-purple-400" />}
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-semibold text-white">{item.service}</span>
+                          <div className="overflow-hidden">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-white truncate">{item.service}</span>
                               {isReused && (
                                 <span className="text-[10px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded-full border border-rose-500/30">
                                   Reused
                                 </span>
                               )}
                             </div>
-                            <span className="text-xs text-slate-400">{item.username}</span>
+                            <span className="text-xs text-slate-400 truncate block">{item.username}</span>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/60">
                           <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
                             <span className="font-mono text-xs text-slate-300">
                               {isVisible ? clearPwd : '••••••••••••'}
@@ -690,7 +726,7 @@ export default function App() {
                             </button>
                           </div>
 
-                          <div className="text-right min-w-[70px]">
+                          <div className="text-right min-w-[60px]">
                             <span className={`text-xs font-mono font-bold ${
                               entropy < 40 ? 'text-rose-400' : entropy < 60 ? 'text-amber-400' : 'text-emerald-400'
                             }`}>
@@ -698,20 +734,22 @@ export default function App() {
                             </span>
                           </div>
 
-                          <button
-                            onClick={() => copyToClipboard(clearPwd)}
-                            className="p-1.5 text-slate-500 hover:text-white transition-colors cursor-pointer"
-                            title="Αντιγραφή"
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => moveToTrash(item.id)}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
-                            title="Μεταφορά στον Κάδο"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => copyToClipboard(clearPwd)}
+                              className="p-1.5 text-slate-500 hover:text-white transition-colors cursor-pointer"
+                              title="Αντιγραφή"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => moveToTrash(item.id)}
+                              className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+                              title="Μεταφορά στον Κάδο"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -725,7 +763,7 @@ export default function App() {
 
         {/* VIEW 2: TRASH */}
         {activeView === 'trash' && (
-          <div className="p-8 max-w-5xl w-full mx-auto space-y-6">
+          <div className="p-4 md:p-8 max-w-5xl w-full mx-auto space-y-6">
             <div>
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
                 <Trash2 className="w-5 h-5 text-rose-400" />
@@ -741,7 +779,7 @@ export default function App() {
                 </div>
               ) : (
                 trashItems.map((item) => (
-                  <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4">
+                  <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
                       <div className="text-sm font-semibold text-white">{item.service}</div>
                       <div className="text-xs text-slate-400">{item.username}</div>
@@ -772,7 +810,7 @@ export default function App() {
 
         {/* VIEW 3: AUDITOR */}
         {activeView === 'auditor' && (
-          <div className="p-8 max-w-2xl w-full mx-auto space-y-6">
+          <div className="p-4 md:p-8 max-w-2xl w-full mx-auto space-y-6">
             <div>
               <h2 className="text-xl font-bold text-white">Έλεγχος Διαρροών</h2>
               <p className="text-xs text-slate-400">Ελέγξτε αν ένας κωδικός έχει διαρρεύσει στο διαδίκτυο</p>
@@ -819,7 +857,7 @@ export default function App() {
 
         {/* VIEW 4: GENERATOR */}
         {activeView === 'generator' && (
-          <div className="p-8 max-w-2xl w-full mx-auto space-y-6">
+          <div className="p-4 md:p-8 max-w-2xl w-full mx-auto space-y-6">
             <div>
               <h2 className="text-xl font-bold text-white">Γεννήτρια Κωδικών</h2>
               <p className="text-xs text-slate-400">Δημιουργία ισχυρών, τυχαίων κωδικών</p>
@@ -877,12 +915,12 @@ export default function App() {
           </div>
         )}
 
-        {/* BOTTOM FIXED BAR - ΕΝΑ ΚΑΘΑΡΟ ΚΟΥΜΠΙ */}
+        {/* BOTTOM FIXED BAR - ΚΕΝΤΡΑΡΙΣΜΕΝΟ ΣΕ ΚΙΝΗΤΑ ΚΑΙ DESKTOP */}
         {activeView === 'vault' && (
-          <div className="fixed bottom-6 left-64 right-0 flex justify-center px-6 pointer-events-none">
+          <div className="fixed bottom-6 left-0 right-0 md:left-64 flex justify-center px-4 pointer-events-none z-20">
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="pointer-events-auto bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-6 py-3.5 rounded-2xl text-xs flex items-center gap-2 shadow-2xl shadow-emerald-500/20 transition-all hover:scale-105 cursor-pointer"
+              className="pointer-events-auto bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-5 py-3 rounded-2xl text-xs flex items-center gap-2 shadow-2xl shadow-emerald-500/20 transition-all hover:scale-105 cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>Προσθήκη Κωδικού</span>
@@ -971,4 +1009,4 @@ export default function App() {
 
     </div>
   );
-}
+}  
