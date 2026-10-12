@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import * as OTPAuth from 'otpauth';
 import { supabase } from './supabaseClient';
 import { deriveKey, encryptText, decryptText } from './cryptoUtils';
 import { 
@@ -26,14 +27,56 @@ import {
   RotateCcw, 
   User, 
   Plus, 
-  Menu,
+  Menu, 
   X, 
-  LogOut,
-  Shield,
-  Settings,
-  Key,
-  AlertTriangle
+  LogOut, 
+  Shield, 
+  Settings, 
+  Key, 
+  AlertTriangle,
+  Pencil,
+  Globe,
+  ExternalLink,
+  Smartphone
 } from 'lucide-react';
+
+// Βοηθητικές συναρτήσεις για URLs και Favicons
+function formatWebsiteUrl(url, service) {
+  const target = (url && url.trim()) || service;
+  if (!target) return '#';
+  let cleaned = target.trim();
+  if (!/^https?:\/\//i.test(cleaned)) {
+    cleaned = cleaned.includes('.') ? `https://${cleaned}` : `https://${cleaned}.com`;
+  }
+  return cleaned;
+}
+
+function getServiceFaviconUrl(serviceName, websiteUrl) {
+  const target = (websiteUrl && websiteUrl.trim()) || serviceName;
+  if (!target) return null;
+  const cleaned = target.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '');
+  const domain = cleaned.includes('.') ? cleaned.split('/')[0] : `${cleaned}.com`;
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+}
+
+// Υπολογισμός κωδικού TOTP (RFC 6238)
+function getTOTPCode(secret) {
+  if (!secret) return null;
+  try {
+    const cleanSecret = secret.trim().replace(/\s+/g, '').toUpperCase();
+    const totp = new OTPAuth.TOTP({
+      issuer: 'Vault',
+      label: 'User',
+      algorithm: 'SHA1',
+      digits: 6,
+      period: 30,
+      secret: OTPAuth.Secret.fromBase32(cleanSecret)
+    });
+    return totp.generate();
+  } catch (err) {
+    return null;
+  }
+}
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -44,6 +87,23 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
+  // Αντίστροφη μέτρηση 30 δευτερολέπτων για το 2FA
+  const [totpRemaining, setTotpRemaining] = useState(30 - (Math.floor(Date.now() / 1000) % 30));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTotpRemaining(30 - (Math.floor(Date.now() / 1000) % 30));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Toast Notification State
+  const [toast, setToast] = useState(null);
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   // Κλειδί κρυπτογράφησης
   const [encryptionKey, setEncryptionKey] = useState(null);
 
@@ -52,21 +112,27 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [filterSecurity, setFilterSecurity] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
 
   // Vault Items
   const [vaultItems, setVaultItems] = useState([]);
   const [decryptedPasswords, setDecryptedPasswords] = useState({});
+  const [decryptedTotpSecrets, setDecryptedTotpSecrets] = useState({});
   const [dataLoading, setDataLoading] = useState(false);
 
   // Form State
-  const [newService, setNewService] = useState('');
-  const [newUsername, setNewUsername] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [newCategory, setNewCategory] = useState('banking');
+  const [formService, setFormService] = useState('');
+  const [formWebsiteUrl, setFormWebsiteUrl] = useState('');
+  const [formUsername, setFormUsername] = useState('');
+  const [formPassword, setFormPassword] = useState('');
+  const [formTotpSecret, setFormTotpSecret] = useState('');
+  const [formCategory, setFormCategory] = useState('banking');
   const [visiblePasswords, setVisiblePasswords] = useState({});
 
-  // Settings State (Αλλαγή Κωδικού & Διαγραφή)
+  // Settings State
   const [oldPasswordInput, setOldPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
@@ -82,14 +148,13 @@ export default function App() {
   const [genDigits, setGenDigits] = useState(true);
   const [genSymbols, setGenSymbols] = useState(true);
   const [generatedPassword, setGeneratedPassword] = useState('');
-  const [copied, setCopied] = useState(false);
 
   // Auditor State
   const [auditorPassword, setAuditorPassword] = useState('');
   const [pwnedCount, setPwnedCount] = useState(null);
   const [isCheckingPwned, setIsCheckingPwned] = useState(false);
 
-  // Παρακολούθηση Auth Session
+  // Auth Session Watcher
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -102,13 +167,14 @@ export default function App() {
       if (!session) {
         setEncryptionKey(null);
         setDecryptedPasswords({});
+        setDecryptedTotpSecrets({});
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Φόρτωση & Ασφαλής Αποκρυπτογράφηση
+  // Fetch & Decrypt
   const fetchVault = async (activeKey) => {
     if (!session?.user) return;
     setDataLoading(true);
@@ -121,21 +187,37 @@ export default function App() {
     if (!error && data) {
       setVaultItems(data);
 
-      const decMap = {};
+      const decPassMap = {};
+      const decTotpMap = {};
+
       for (const item of data) {
-        if (!item.encrypted_password) {
-          decMap[item.id] = '';
-          continue;
+        // Password Decryption
+        if (item.encrypted_password) {
+          if (activeKey) {
+            const res = await decryptText(item.encrypted_password, activeKey);
+            decPassMap[item.id] = res === '[Σφάλμα Αποκρυπτογράφησης]' ? item.encrypted_password : res;
+          } else {
+            decPassMap[item.id] = item.encrypted_password;
+          }
+        } else {
+          decPassMap[item.id] = '';
         }
 
-        if (activeKey) {
-          const res = await decryptText(item.encrypted_password, activeKey);
-          decMap[item.id] = res === '[Σφάλμα Αποκρυπτογράφησης]' ? item.encrypted_password : res;
+        // TOTP Secret Decryption
+        if (item.totp_secret) {
+          if (activeKey) {
+            const res = await decryptText(item.totp_secret, activeKey);
+            decTotpMap[item.id] = res === '[Σφάλμα Αποκρυπτογράφησης]' ? '' : res;
+          } else {
+            decTotpMap[item.id] = item.totp_secret;
+          }
         } else {
-          decMap[item.id] = item.encrypted_password;
+          decTotpMap[item.id] = '';
         }
       }
-      setDecryptedPasswords(decMap);
+
+      setDecryptedPasswords(decPassMap);
+      setDecryptedTotpSecrets(decTotpMap);
     }
     setDataLoading(false);
   };
@@ -161,6 +243,7 @@ export default function App() {
       setEncryptionKey(derived);
       setAuthEmail('');
       setAuthPassword('');
+      showToast('Επιτυχής δημιουργία λογαριασμού!');
     }
   };
 
@@ -178,145 +261,115 @@ export default function App() {
       setEncryptionKey(derived);
       setAuthEmail('');
       setAuthPassword('');
+      showToast('Καλωσήρθατε στο Vault!');
     }
   };
 
   const handleSignOut = async () => {
     setEncryptionKey(null);
     setDecryptedPasswords({});
+    setDecryptedTotpSecrets({});
     setIsSidebarOpen(false);
     await supabase.auth.signOut();
+    showToast('Αποσυνδεθήκατε με ασφάλεια.');
   };
 
-  // Αλλαγή Master Password με Re-encryption
-  const handleChangeMasterPassword = async (e) => {
+  // Add / Edit Entry
+  const handleSaveEntry = async (e) => {
     e.preventDefault();
-    setSettingsError('');
-    setSettingsMsg('');
+    if (!formService.trim() || !formPassword.trim()) return;
 
-    if (newPasswordInput.length < 6) {
-      setSettingsError('Ο νέος κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες.');
-      return;
+    let cipherPassword = formPassword.trim();
+    let cipherTotp = formTotpSecret.trim() ? formTotpSecret.trim() : null;
+
+    if (encryptionKey) {
+      cipherPassword = await encryptText(formPassword.trim(), encryptionKey);
+      if (cipherTotp) {
+        cipherTotp = await encryptText(cipherTotp, encryptionKey);
+      }
     }
 
-    if (newPasswordInput !== confirmPasswordInput) {
-      setSettingsError('Οι νέοι κωδικοί δεν ταιριάζουν μεταξύ τους.');
-      return;
-    }
-
-    setIsChangingPassword(true);
-    try {
-      // 1. Έλεγχος αν ο παλιός κωδικός είναι σωστός
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: session.user.email,
-        password: oldPasswordInput,
-      });
-
-      if (signInError) {
-        setSettingsError('Ο τρέχων κωδικός πρόσβασης είναι λανθασμένος.');
-        setIsChangingPassword(false);
-        return;
-      }
-
-      // 2. Δημιουργία νέου κλειδιού κρυπτογράφησης
-      const newDerivedKey = await deriveKey(newPasswordInput, session.user.id);
-
-      // 3. Επαν-κρυπτογράφηση όλων των κωδικών στη βάση
-      for (const item of vaultItems) {
-        const clearText = decryptedPasswords[item.id] || '';
-        if (clearText) {
-          const newCipher = await encryptText(clearText, newDerivedKey);
-          await supabase
-            .from('vault_items')
-            .update({ encrypted_password: newCipher })
-            .eq('id', item.id);
-        }
-      }
-
-      // 4. Ενημέρωση κωδικού στο Supabase Auth
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPasswordInput
-      });
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      // 5. Ενημέρωση του ενεργού κλειδιού στη μνήμη
-      setEncryptionKey(newDerivedKey);
-      setSettingsMsg('Ο κωδικός πρόσβασης άλλαξε με επιτυχία!');
-      setOldPasswordInput('');
-      setNewPasswordInput('');
-      setConfirmPasswordInput('');
-    } catch (err) {
-      setSettingsError('Σφάλμα κατά την αλλαγή κωδικού: ' + err.message);
-    } finally {
-      setIsChangingPassword(false);
-    }
-  };
-
-  // Διαγραφή Λογαριασμού & Όλων των Δεδομένων
-  const handleDeleteAccount = async () => {
-    const confirmDelete = window.confirm(
-      'ΠΡΟΣΟΧΗ: Αυτή η ενέργεια θα διαγράψει οριστικά όλους τους αποθηκευμένους κωδικούς σας από το cloud και θα αποσυνδέσει τον λογαριασμό. Είστε σίγουροι;'
-    );
-
-    if (!confirmDelete) return;
-
-    setIsDeletingAccount(true);
-    try {
-      // 1. Διαγραφή όλων των εγγραφών του χρήστη
+    if (editingItem) {
       const { error } = await supabase
         .from('vault_items')
-        .delete()
-        .eq('user_id', session.user.id);
+        .update({
+          service: formService.trim(),
+          username: formUsername.trim() || '-',
+          encrypted_password: cipherPassword,
+          category: formCategory,
+          website_url: formWebsiteUrl.trim() || null,
+          totp_secret: cipherTotp
+        })
+        .eq('id', editingItem.id);
 
-      if (error) throw error;
+      if (!error) {
+        setVaultItems(vaultItems.map(i => i.id === editingItem.id ? {
+          ...i,
+          service: formService.trim(),
+          username: formUsername.trim() || '-',
+          encrypted_password: cipherPassword,
+          category: formCategory,
+          website_url: formWebsiteUrl.trim() || null,
+          totp_secret: cipherTotp
+        } : i));
+        setDecryptedPasswords(prev => ({ ...prev, [editingItem.id]: formPassword.trim() }));
+        setDecryptedTotpSecrets(prev => ({ ...prev, [editingItem.id]: formTotpSecret.trim() }));
+        setEditingItem(null);
+        setIsAddModalOpen(false);
+        showToast('Ο κωδικός ενημερώθηκε επιτυχώς!');
+      } else {
+        showToast('Σφάλμα: ' + error.message, 'error');
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('vault_items')
+        .insert([
+          {
+            user_id: session.user.id,
+            service: formService.trim(),
+            username: formUsername.trim() || '-',
+            encrypted_password: cipherPassword,
+            category: formCategory,
+            website_url: formWebsiteUrl.trim() || null,
+            totp_secret: cipherTotp,
+            is_deleted: false
+          }
+        ])
+        .select();
 
-      alert('Όλα τα δεδομένα σας διαγράφηκαν με επιτυχία.');
-      await handleSignOut();
-    } catch (err) {
-      alert('Σφάλμα διαγραφής: ' + err.message);
-    } finally {
-      setIsDeletingAccount(false);
+      if (!error && data) {
+        const newItem = data[0];
+        setVaultItems([newItem, ...vaultItems]);
+        setDecryptedPasswords(prev => ({ ...prev, [newItem.id]: formPassword.trim() }));
+        setDecryptedTotpSecrets(prev => ({ ...prev, [newItem.id]: formTotpSecret.trim() }));
+        setIsAddModalOpen(false);
+        showToast('Ο κωδικός προστέθηκε στο Vault!');
+      } else if (error) {
+        showToast('Σφάλμα κατά την αποθήκευση: ' + error.message, 'error');
+      }
     }
   };
 
-  // Προσθήκη Κωδικού
-  const addVaultEntry = async (e) => {
-    e.preventDefault();
-    if (!newService.trim() || !newPassword.trim()) return;
+  const openAddModal = () => {
+    setEditingItem(null);
+    setFormService('');
+    setFormWebsiteUrl('');
+    setFormUsername('');
+    setFormPassword('');
+    setFormTotpSecret('');
+    setFormCategory('banking');
+    setIsAddModalOpen(true);
+  };
 
-    let cipherText = newPassword.trim();
-    if (encryptionKey) {
-      cipherText = await encryptText(newPassword.trim(), encryptionKey);
-    }
-
-    const { data, error } = await supabase
-      .from('vault_items')
-      .insert([
-        {
-          user_id: session.user.id,
-          service: newService.trim(),
-          username: newUsername.trim() || '-',
-          encrypted_password: cipherText,
-          category: newCategory,
-          is_deleted: false
-        }
-      ])
-      .select();
-
-    if (!error && data) {
-      const newItem = data[0];
-      setVaultItems([newItem, ...vaultItems]);
-      setDecryptedPasswords(prev => ({ ...prev, [newItem.id]: newPassword.trim() }));
-      setNewService('');
-      setNewUsername('');
-      setNewPassword('');
-      setIsAddModalOpen(false);
-    } else if (error) {
-      alert('Σφάλμα κατά την αποθήκευση: ' + error.message);
-    }
+  const openEditModal = (item) => {
+    setEditingItem(item);
+    setFormService(item.service);
+    setFormWebsiteUrl(item.website_url || '');
+    setFormUsername(item.username === '-' ? '' : item.username);
+    setFormPassword(decryptedPasswords[item.id] || '');
+    setFormTotpSecret(decryptedTotpSecrets[item.id] || '');
+    setFormCategory(item.category);
+    setIsAddModalOpen(true);
   };
 
   const moveToTrash = async (id) => {
@@ -327,6 +380,7 @@ export default function App() {
 
     if (!error) {
       setVaultItems(vaultItems.map(item => item.id === id ? { ...item, is_deleted: true } : item));
+      showToast('Μεταφέρθηκε στον κάδο.');
     }
   };
 
@@ -338,6 +392,7 @@ export default function App() {
 
     if (!error) {
       setVaultItems(vaultItems.map(item => item.id === id ? { ...item, is_deleted: false } : item));
+      showToast('Ο κωδικός επαναφέρθηκε!');
     }
   };
 
@@ -354,6 +409,100 @@ export default function App() {
         delete copy[id];
         return copy;
       });
+      setDecryptedTotpSecrets(prev => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
+      showToast('Διαγράφηκε οριστικά.');
+    }
+  };
+
+  // Change Master Password
+  const handleChangeMasterPassword = async (e) => {
+    e.preventDefault();
+    setSettingsError('');
+    setSettingsMsg('');
+
+    if (newPasswordInput.length < 6) {
+      setSettingsError('Ο νέος κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες.');
+      return;
+    }
+    if (newPasswordInput !== confirmPasswordInput) {
+      setSettingsError('Οι νέοι κωδικοί δεν ταιριάζουν μεταξύ τους.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password: oldPasswordInput,
+      });
+
+      if (signInError) {
+        setSettingsError('Ο τρέχων κωδικός πρόσβασης είναι λανθασμένος.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      const newDerivedKey = await deriveKey(newPasswordInput, session.user.id);
+
+      for (const item of vaultItems) {
+        const clearPass = decryptedPasswords[item.id] || '';
+        const clearTotp = decryptedTotpSecrets[item.id] || '';
+        
+        let newPassCipher = item.encrypted_password;
+        let newTotpCipher = item.totp_secret;
+
+        if (clearPass) {
+          newPassCipher = await encryptText(clearPass, newDerivedKey);
+        }
+        if (clearTotp) {
+          newTotpCipher = await encryptText(clearTotp, newDerivedKey);
+        }
+
+        await supabase
+          .from('vault_items')
+          .update({ 
+            encrypted_password: newPassCipher,
+            totp_secret: newTotpCipher
+          })
+          .eq('id', item.id);
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPasswordInput
+      });
+
+      if (updateError) throw updateError;
+
+      setEncryptionKey(newDerivedKey);
+      setSettingsMsg('Ο κωδικός πρόσβασης άλλαξε με επιτυχία!');
+      setOldPasswordInput('');
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+      showToast('Το Master Password ενημερώθηκε!');
+    } catch (err) {
+      setSettingsError('Σφάλμα: ' + err.message);
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  // Delete Account
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('ΠΡΟΣΟΧΗ: Αυτή η ενέργεια θα διαγράψει οριστικά όλους τους κωδικούς σας. Συνέχεια;')) return;
+    setIsDeletingAccount(true);
+    try {
+      const { error } = await supabase.from('vault_items').delete().eq('user_id', session.user.id);
+      if (error) throw error;
+      showToast('Όλα τα δεδομένα διαγράφηκαν.');
+      await handleSignOut();
+    } catch (err) {
+      showToast('Σφάλμα διαγραφής: ' + err.message, 'error');
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -364,9 +513,7 @@ export default function App() {
     const counts = {};
     activeVault.forEach(item => {
       const clearPwd = decryptedPasswords[item.id] || '';
-      if (clearPwd) {
-        counts[clearPwd] = (counts[clearPwd] || 0) + 1;
-      }
+      if (clearPwd) counts[clearPwd] = (counts[clearPwd] || 0) + 1;
     });
     return counts;
   }, [activeVault, decryptedPasswords]);
@@ -423,11 +570,10 @@ export default function App() {
     generatePassword();
   }, [genLength, genLower, genUpper, genDigits, genSymbols]);
 
-  const copyToClipboard = (text) => {
+  const copyToClipboard = (text, label = 'Ο κωδικός') => {
     if (!text) return;
     navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    showToast(`${label} αντιγράφηκε στο πρόχειρο!`);
   };
 
   useEffect(() => {
@@ -471,6 +617,13 @@ export default function App() {
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4">
+        {toast && (
+          <div className={`fixed top-5 z-50 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl flex items-center gap-2 border ${
+            toast.type === 'error' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+          }`}>
+            <span>{toast.message}</span>
+          </div>
+        )}
         <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
           <div className="text-center space-y-2">
             <div className="mx-auto w-14 h-14 bg-emerald-500/10 rounded-2xl border border-emerald-500/20 flex items-center justify-center text-emerald-400">
@@ -549,7 +702,17 @@ export default function App() {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
       
-      {/* 1. OVERLAY ΓΙΑ ΚΙΝΗΤΑ */}
+      {/* FLOATING TOAST NOTIFICATION */}
+      {toast && (
+        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-2xl text-xs font-semibold shadow-2xl flex items-center gap-2 border transition-all animate-in slide-in-from-top duration-200 ${
+          toast.type === 'error' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+        }`}>
+          {toast.type === 'error' ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <Check className="w-4 h-4 text-emerald-400" />}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* OVERLAY ΓΙΑ ΚΙΝΗΤΑ */}
       {isSidebarOpen && (
         <div 
           onClick={() => setIsSidebarOpen(false)} 
@@ -557,7 +720,7 @@ export default function App() {
         />
       )}
 
-      {/* 2. SIDEBAR */}
+      {/* SIDEBAR */}
       <aside className={`
         fixed md:static inset-y-0 left-0 z-50
         w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0
@@ -721,7 +884,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* 3. MAIN CONTENT AREA */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 flex flex-col overflow-y-auto relative pb-28 w-full min-w-0">
         
         {/* Mobile Top Header */}
@@ -804,25 +967,54 @@ export default function App() {
                 ) : (
                   filteredVault.map((item) => {
                     const clearPwd = decryptedPasswords[item.id] || item.encrypted_password || '';
+                    const clearTotp = decryptedTotpSecrets[item.id] || '';
+                    const totpCode = getTOTPCode(clearTotp);
                     const entropy = calculateEntropy(clearPwd);
                     const isReused = clearPwd && passwordOccurrences[clearPwd] > 1;
                     const isVisible = visiblePasswords[item.id];
+                    const faviconUrl = getServiceFaviconUrl(item.service, item.website_url);
+                    const targetUrl = formatWebsiteUrl(item.website_url, item.service);
 
                     return (
                       <div 
                         key={item.id} 
-                        className="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors"
+                        className="bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors group"
                       >
+                        {/* Service Icon & Info */}
                         <div className="flex items-center gap-3.5">
-                          <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-slate-400 shrink-0">
-                            {item.category === 'banking' && <Landmark className="w-4 h-4 text-amber-400" />}
-                            {item.category === 'email' && <Mail className="w-4 h-4 text-sky-400" />}
-                            {item.category === 'social' && <Share2 className="w-4 h-4 text-pink-400" />}
-                            {item.category === 'work' && <Briefcase className="w-4 h-4 text-purple-400" />}
+                          <div className="w-10 h-10 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-center shrink-0 overflow-hidden relative">
+                            {faviconUrl ? (
+                              <img 
+                                src={faviconUrl} 
+                                alt={item.service} 
+                                className="w-5 h-5 object-contain"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none';
+                                  e.currentTarget.nextElementSibling.style.display = 'block';
+                                }}
+                              />
+                            ) : null}
+                            <div className="hidden">
+                              {item.category === 'banking' && <Landmark className="w-4 h-4 text-amber-400" />}
+                              {item.category === 'email' && <Mail className="w-4 h-4 text-sky-400" />}
+                              {item.category === 'social' && <Share2 className="w-4 h-4 text-pink-400" />}
+                              {item.category === 'work' && <Briefcase className="w-4 h-4 text-purple-400" />}
+                            </div>
                           </div>
                           <div className="overflow-hidden">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-semibold text-white truncate">{item.service}</span>
+                              
+                              <a
+                                href={targetUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-slate-800 transition-colors"
+                                title="Άνοιγμα ιστοσελίδας"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+
                               {isReused && (
                                 <span className="text-[10px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded-full border border-rose-500/30">
                                   Reused
@@ -833,7 +1025,32 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/60">
+                        {/* Middle: 2FA TOTP Authenticator Badge */}
+                        {totpCode && (
+                          <div className="flex items-center gap-2.5 bg-slate-950/80 border border-emerald-500/30 px-3.5 py-1.5 rounded-xl self-start md:self-center">
+                            <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-emerald-300 tracking-wider">
+                                {totpCode.slice(0, 3)} {totpCode.slice(3)}
+                              </span>
+                              <div className="relative w-4 h-4 flex items-center justify-center">
+                                <span className={`text-[10px] font-mono font-bold ${totpRemaining <= 5 ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`}>
+                                  {totpRemaining}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => copyToClipboard(totpCode, 'Ο κωδικός 2FA')}
+                              className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                              title="Αντιγραφή κωδικού 2FA"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Password & Actions */}
+                        <div className="flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-slate-800/60">
                           <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
                             <span className="font-mono text-xs text-slate-300">
                               {isVisible ? clearPwd : '••••••••••••'}
@@ -841,6 +1058,7 @@ export default function App() {
                             <button 
                               onClick={() => setVisiblePasswords(p => ({ ...p, [item.id]: !p[item.id] }))}
                               className="text-slate-500 hover:text-slate-300 cursor-pointer"
+                              title={isVisible ? "Απόκρυψη" : "Προβολή"}
                             >
                               {isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                             </button>
@@ -856,11 +1074,18 @@ export default function App() {
 
                           <div className="flex items-center gap-1">
                             <button
-                              onClick={() => copyToClipboard(clearPwd)}
+                              onClick={() => copyToClipboard(clearPwd, 'Ο κωδικός')}
                               className="p-1.5 text-slate-500 hover:text-white transition-colors cursor-pointer"
-                              title="Αντιγραφή"
+                              title="Αντιγραφή Κωδικού"
                             >
                               <Copy className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => openEditModal(item)}
+                              className="p-1.5 text-slate-500 hover:text-emerald-400 transition-colors cursor-pointer"
+                              title="Επεξεργασία"
+                            >
+                              <Pencil className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => moveToTrash(item.id)}
@@ -992,8 +1217,8 @@ export default function App() {
                   <button onClick={generatePassword} className="p-2 bg-slate-900 hover:bg-slate-850 text-slate-300 rounded-xl border border-slate-800 transition-colors cursor-pointer">
                     <RefreshCw className="w-4 h-4" />
                   </button>
-                  <button onClick={() => copyToClipboard(generatedPassword)} className="p-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold rounded-xl transition-colors cursor-pointer">
-                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <button onClick={() => copyToClipboard(generatedPassword, 'Ο παραγόμενος κωδικός')} className="p-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold rounded-xl transition-colors cursor-pointer">
+                    <Copy className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -1035,7 +1260,7 @@ export default function App() {
           </div>
         )}
 
-        {/* VIEW 5: SETTINGS & ACCOUNT MANAGEMENT */}
+        {/* VIEW 5: SETTINGS */}
         {activeView === 'settings' && (
           <div className="p-4 md:p-8 max-w-2xl w-full mx-auto space-y-6">
             <div>
@@ -1048,14 +1273,13 @@ export default function App() {
               </p>
             </div>
 
-            {/* Change Password Card */}
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Key className="w-4 h-4 text-emerald-400" />
-                Αλλαγή Κωδικού Πρόσβασης (Master Password)
+                Αλλαγή Master Password
               </h3>
               <p className="text-[11px] text-slate-400">
-                Οι αποθηκευμένοι κωδικοί σας θα επαν-κρυπτογραφηθούν αυτόματα με το νέο σας κλειδί.
+                Οι αποθηκευμένοι κωδικοί και τα κλειδιά 2FA θα επαν-κρυπτογραφηθούν αυτόματα με το νέο κλειδί.
               </p>
 
               <form onSubmit={handleChangeMasterPassword} className="space-y-3" autoComplete="off">
@@ -1127,14 +1351,13 @@ export default function App() {
               </form>
             </div>
 
-            {/* Delete Account Card */}
             <div className="bg-rose-950/20 border border-rose-500/20 rounded-3xl p-6 shadow-xl space-y-4">
               <h3 className="text-sm font-bold text-rose-400 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-rose-400" />
                 Κατάργηση Λογαριασμού & Δεδομένων
               </h3>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Η ενέργεια αυτή θα διαγράψει οριστικά όλους τους κωδικούς σας από το cloud vault και θα σας αποσυνδέσει. Τα δεδομένα δεν μπορούν να ανακτηθούν.
+                Η ενέργεια αυτή θα διαγράψει οριστικά όλους τους κωδικούς σας από το cloud vault και θα σας αποσυνδέσει.
               </p>
 
               <button
@@ -1160,7 +1383,7 @@ export default function App() {
         {activeView === 'vault' && (
           <div className="fixed bottom-6 left-0 right-0 md:left-64 flex justify-center px-4 pointer-events-none z-20">
             <button
-              onClick={() => setIsAddModalOpen(true)}
+              onClick={openAddModal}
               className="pointer-events-auto bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-5 py-3 rounded-2xl text-xs flex items-center gap-2 shadow-2xl shadow-emerald-500/20 transition-all hover:scale-105 cursor-pointer"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
@@ -1169,34 +1392,58 @@ export default function App() {
           </div>
         )}
 
+        {/* BOTTOM RIGHT SECURITY BADGE */}
+        <div className="fixed bottom-3 right-4 z-10 pointer-events-none hidden sm:flex flex-col items-end gap-0.5 text-right opacity-70 hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-medium">
+            <Shield className="w-3 h-3" />
+            <span>AES-256 GCM Zero-Knowledge</span>
+          </div>
+          <p className="text-[9px] text-slate-500 font-sans">
+            © {new Date().getFullYear()} Password Vault • v1.2
+          </p>
+        </div>
+
       </main>
 
-      {/* MODAL: ADD NEW PASSWORD */}
+      {/* MODAL: ADD / EDIT PASSWORD */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <span className="text-sm font-bold text-white flex items-center gap-2">
-                <PlusCircle className="w-4 h-4 text-emerald-400" />
-                Προσθήκη Νέου Κωδικού
+                {editingItem ? <Pencil className="w-4 h-4 text-emerald-400" /> : <PlusCircle className="w-4 h-4 text-emerald-400" />}
+                {editingItem ? 'Επεξεργασία Κωδικού' : 'Προσθήκη Νέου Κωδικού'}
               </span>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={addVaultEntry} className="space-y-3" autoComplete="off">
+            <form onSubmit={handleSaveEntry} className="space-y-3" autoComplete="off">
               <div>
                 <label className="text-[11px] text-slate-400 mb-1 block">Υπηρεσία / Ιστότοπος</label>
                 <input
                   type="text"
                   name="service_site"
                   autoComplete="off"
-                  placeholder="π.χ. Netflix, Τράπεζα Πειραιώς"
-                  value={newService}
-                  onChange={(e) => setNewService(e.target.value)}
+                  placeholder="π.χ. Google, Netflix, GitHub"
+                  value={formService}
+                  onChange={(e) => setFormService(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   required
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Ιστοσελίδα / URL (Προαιρετικό)</label>
+                <input
+                  type="text"
+                  name="entry_website_url"
+                  autoComplete="off"
+                  placeholder="π.χ. https://github.com"
+                  value={formWebsiteUrl}
+                  onChange={(e) => setFormWebsiteUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -1207,8 +1454,8 @@ export default function App() {
                   name="entry_account_id"
                   autoComplete="off"
                   placeholder="π.χ. user@example.com"
-                  value={newUsername}
-                  onChange={(e) => setNewUsername(e.target.value)}
+                  value={formUsername}
+                  onChange={(e) => setFormUsername(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                 />
               </div>
@@ -1220,18 +1467,34 @@ export default function App() {
                   name="entry_credential_secret"
                   autoComplete="new-password"
                   placeholder="Εισάγετε τον κωδικό"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  value={formPassword}
+                  onChange={(e) => setFormPassword(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   required
                 />
               </div>
 
               <div>
+                <label className="text-[11px] text-slate-400 mb-1 block flex items-center justify-between">
+                  <span>2FA Secret / TOTP Key (Προαιρετικό)</span>
+                  <span className="text-[10px] text-emerald-400">Zero-Knowledge</span>
+                </label>
+                <input
+                  type="text"
+                  name="entry_totp_secret"
+                  autoComplete="off"
+                  placeholder="π.χ. JBSWY3DPEHPK3PXP"
+                  value={formTotpSecret}
+                  onChange={(e) => setFormTotpSecret(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+                />
+              </div>
+
+              <div>
                 <label className="text-[11px] text-slate-400 mb-1 block">Κατηγορία</label>
                 <select
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
+                  value={formCategory}
+                  onChange={(e) => setFormCategory(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="banking">Τράπεζα (Banking)</option>
@@ -1242,11 +1505,11 @@ export default function App() {
               </div>
 
               <div className="pt-2 flex gap-2">
-                <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors">
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition-colors cursor-pointer">
                   Ακύρωση
                 </button>
-                <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors">
-                  Αποθήκευση
+                <button type="submit" className="w-1/2 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition-colors cursor-pointer">
+                  {editingItem ? 'Ενημέρωση' : 'Αποθήκευση'}
                 </button>
               </div>
             </form>
